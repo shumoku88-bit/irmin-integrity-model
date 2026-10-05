@@ -214,3 +214,110 @@ jobs:
           grep -F 'RESULT custom-varint-minimal FAIL' /tmp/repro-matrix.log
           grep -F 'RESULT custom-none-minimal FAIL' /tmp/repro-matrix.log
           grep -F 'RESULT custom-none-always PASS' /tmp/repro-matrix.log
+
+      - name: Add GC Moment B lower metadata reproducer
+        working-directory: irmin
+        shell: bash
+        run: |
+          mkdir -p repro_moment_b
+          cat > repro_moment_b/dune <<'EOF'
+          (executable
+           (name repro_moment_b)
+           (libraries irmin-pack.unix optint unix))
+          EOF
+
+          cat > repro_moment_b/repro_moment_b.ml <<'EOF'
+          module Io = Irmin_pack_unix.Io.Unix
+          module Errs = Irmin_pack_unix.Io_errors.Make (Io)
+          module Lower = Irmin_pack_unix.Lower.Make (Io) (Errs)
+          module Control = Irmin_pack_unix.Control_file.Volume (Io)
+          module Payload = Irmin_pack_unix.Control_file.Payload.Volume.Latest
+          module Int63 = Optint.Int63
+
+          let ok = function Ok x -> x | Error _ -> failwith "unexpected Irmin error"
+
+          let write_control path payload =
+            let c =
+              ok
+                (Control.create_rw ~path ~tmp_path:None ~overwrite:true payload)
+            in
+            ok (Control.close c)
+
+          let visible lower off =
+            Lower.find_volume ~off:(Int63.of_int off) lower |> Option.is_some
+
+          let () =
+            let root = "_build/repro-moment-b-lower" in
+            ignore (Sys.command ("rm -rf " ^ Filename.quote root));
+            Unix.mkdir root 0o755;
+
+            (* Create one empty volume and its mapping/data files. *)
+            let lower = ok (Lower.v ~readonly:false ~volume_num:0 root) in
+            let volume = ok (Lower.add_volume lower) in
+            let volume_root = Lower.Volume.path volume in
+            ignore (Lower.close lower);
+
+            let current =
+              Irmin_pack.Layout.V5.Volume.control ~root:volume_root
+            in
+            let generation_tmp =
+              Irmin_pack.Layout.V5.Volume.control_gc_tmp ~generation:1
+                ~root:volume_root
+            in
+
+            let old_payload =
+              Payload.
+                {
+                  start_offset = Int63.zero;
+                  end_offset = Int63.of_int 10;
+                  mapping_end_poff = Int63.zero;
+                  checksum = Int63.zero;
+                }
+            in
+            let new_payload =
+              Payload.
+                {
+                  start_offset = Int63.zero;
+                  end_offset = Int63.of_int 20;
+                  mapping_end_poff = Int63.zero;
+                  checksum = Int63.zero;
+                }
+            in
+
+            (* Disk state just before startup after a Moment-B crash:
+               volume.control is old, generation tmp contains the new range. *)
+            write_control current old_payload;
+            write_control generation_tmp new_payload;
+
+            (* This mirrors finish_constructing_rw: load lower first. *)
+            let lower = ok (Lower.v ~readonly:false ~volume_num:1 root) in
+            Printf.printf "BEFORE old=%b new=%b\n%!"
+              (visible lower 5) (visible lower 15);
+
+            (* Then startup cleanup renames the generation control. *)
+            ok (Lower.cleanup ~generation:1 lower);
+            let disk_payload = ok (Control.read_payload ~path:current) in
+            Printf.printf "AFTER_CLEANUP disk_end=%d old=%b new=%b\n%!"
+              (Int63.to_int disk_payload.end_offset)
+              (visible lower 5) (visible lower 15);
+
+            (* Control: the normal Lower.swap path performs this reload. *)
+            ok (Lower.reload ~volume_num:1 lower);
+            Printf.printf "AFTER_RELOAD old=%b new=%b\n%!"
+              (visible lower 5) (visible lower 15);
+            ignore (Lower.close lower)
+          EOF
+
+      - name: Build GC Moment B lower metadata reproducer
+        working-directory: irmin
+        run: opam exec -- dune build repro_moment_b/repro_moment_b.exe
+
+      - name: Run GC Moment B lower metadata reproducer
+        working-directory: irmin
+        shell: bash
+        run: |
+          set -euo pipefail
+          opam exec -- dune exec repro_moment_b/repro_moment_b.exe | tee /tmp/moment-b.log
+          grep -F 'BEFORE old=true new=false' /tmp/moment-b.log
+          grep -F 'AFTER_CLEANUP disk_end=20 old=true new=false' /tmp/moment-b.log
+          grep -F 'AFTER_RELOAD old=true new=true' /tmp/moment-b.log
