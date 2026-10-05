@@ -1,0 +1,116 @@
+name: Irmin repro
+
+on:
+  push:
+    branches:
+      - research/minimal-index-integrity
+  workflow_dispatch:
+
+jobs:
+  repro-2369:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout model repo
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned Irmin
+        uses: actions/checkout@v4
+        with:
+          repository: mirage/irmin
+          ref: 7a09a06fff67bc4981faca36a332c51fc16e819e
+          path: irmin
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: '5.2'
+          opam-pin: false
+
+      - name: Install Irmin build dependencies
+        working-directory: irmin
+        run: |
+          opam install ./ppx_irmin.opam ./irmin.opam ./irmin-pack.opam --deps-only -y
+
+      - name: Add minimal reproducer
+        working-directory: irmin
+        shell: bash
+        run: |
+          mkdir -p repro2369
+          cat > repro2369/dune <<'EOF'
+          (executable
+           (name repro2369)
+           (libraries irmin irmin.unix irmin-pack.unix logs lwt.unix)
+           (preprocess
+            (pps ppx_irmin)))
+          EOF
+          cat > repro2369/repro2369.ml <<'EOF'
+          open Lwt.Syntax
+
+          module Contents = struct
+            type t = {
+              name : string;
+              deck : string list;
+              reveal : [ `Everyone | `SpectatorsOnly ];
+            }
+            [@@deriving irmin]
+
+            let merge = Irmin.Merge.(option (idempotent t))
+          end
+
+          module Conf = struct
+            let entries = 32
+            let stable_hash = 256
+            let contents_length_header = Some `Varint
+            let inode_child_order = `Seeded_hash
+            let forbid_empty_dir_persistence = true
+          end
+
+          module StoreMaker = Irmin_pack_unix.KV (Conf)
+          module Store = StoreMaker.Make (Contents)
+
+          let root = "_build/repro2369-db"
+
+          let value =
+            Contents.
+              {
+                name = "alpha";
+                deck = [ "one"; "two"; "three" ];
+                reveal = `Everyone;
+              }
+
+          let config ~fresh =
+            Irmin_pack.config ~fresh
+              ~indexing_strategy:Irmin_pack.Indexing_strategy.minimal root
+
+          let check_value where got =
+            if not (Irmin.Type.equal Contents.t value got) then
+              failwith ("value mismatch at " ^ where);
+            Printf.printf "READ_OK %s\n%!" where
+
+          let run () =
+            let* repo = Store.Repo.v (config ~fresh:true) in
+            let* store = Store.main repo in
+            let* () =
+              Store.set_exn ~info:(fun () -> Store.Info.empty) store [ "k" ] value
+            in
+            let* got = Store.get store [ "k" ] in
+            check_value "same_repo" got;
+            let* () = Store.Repo.close repo in
+
+            Printf.printf "REOPEN\n%!";
+            let* repo2 = Store.Repo.v (config ~fresh:false) in
+            let* store2 = Store.main repo2 in
+            let* got2 = Store.get store2 [ "k" ] in
+            check_value "after_reopen" got2;
+            Store.Repo.close repo2
+
+          let () = Lwt_main.run (run ())
+          EOF
+
+      - name: Build reproducer
+        working-directory: irmin
+        run: opam exec -- dune build repro2369/repro2369.exe
+
+      - name: Run reproducer
+        working-directory: irmin
+        run: opam exec -- dune exec repro2369/repro2369.exe
