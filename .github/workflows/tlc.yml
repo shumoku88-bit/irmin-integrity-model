@@ -46,6 +46,32 @@ jobs:
           java -cp /tmp/tla2tools.jar tlc2.TLC \
             -config Admissible.cfg Admissible.tla
 
+      - name: Check GC Moment B repaired model
+        working-directory: model
+        run: |
+          java -cp /tmp/tla2tools.jar tlc2.TLC \
+            -config GcMomentBReloaded.cfg GcMomentB.tla
+
+      - name: Require GC Moment B current-path counterexample
+        working-directory: model
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          java -cp /tmp/tla2tools.jar tlc2.TLC \
+            -config GcMomentBCurrent.cfg GcMomentB.tla \
+            > /tmp/gc-moment-b.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/gc-moment-b.log
+
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected RoutingSafety to be violated, but TLC succeeded.' >&2
+            exit 1
+          fi
+
+          grep -F 'Invariant RoutingSafety is violated' /tmp/gc-moment-b.log
+
       - name: Require counterexample for Minimal + Indexed
         working-directory: model
         shell: bash
