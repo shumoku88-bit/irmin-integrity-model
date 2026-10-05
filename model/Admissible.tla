@@ -27,8 +27,8 @@ IndexesContents(s) ==
   s # "Minimal"
 
 Admissible(s, h, codecCorrect) ==
-  / (h = "Varint" => codecCorrect)
-  / (h = "None" => IndexesContents(s))
+  /\ (h = "Varint" => codecCorrect)
+  /\ (h = "None" => IndexesContents(s))
 
 ContentHash == "content-hash"
 ContentOffset == 1
@@ -53,105 +53,105 @@ vars ==
     persistedAddress, decodedKeyKind, outcome, phase>>
 
 Init ==
-  / strategy in Strategies
-  / header in Headers
-  / codecCorrect in BOOLEAN
-  / Admissible(strategy, header, codecCorrect)
-  / pack = {}
-  / index = {}
-  / staging = {}
-  / persistedAddress = "None"
-  / decodedKeyKind = "None"
-  / outcome = "None"
-  / phase = "Init"
+  /\ strategy \in Strategies
+  /\ header \in Headers
+  /\ codecCorrect \in BOOLEAN
+  /\ Admissible(strategy, header, codecCorrect)
+  /\ pack = {}
+  /\ index = {}
+  /\ staging = {}
+  /\ persistedAddress = "None"
+  /\ decodedKeyKind = "None"
+  /\ outcome = "None"
+  /\ phase = "Init"
 
 StoreContent ==
-  / phase = "Init"
-  / pack' = pack cup {Entry(ContentHash, ContentOffset)}
-  / index' =
+  /\ phase = "Init"
+  /\ pack' = pack \cup {Entry(ContentHash, ContentOffset)}
+  /\ index' =
        IF IndexesContents(strategy)
-       THEN index cup {Entry(ContentHash, ContentOffset)}
+       THEN index \cup {Entry(ContentHash, ContentOffset)}
        ELSE index
-  / staging' = staging cup {ContentHash}
-  / UNCHANGED <<strategy, header, codecCorrect,
+  /\ staging' = staging \cup {ContentHash}
+  /\ UNCHANGED <<strategy, header, codecCorrect,
                  persistedAddress, decodedKeyKind, outcome>>
-  / phase' = "ContentStored"
+  /\ phase' = "ContentStored"
 
 PersistParent ==
-  / phase = "ContentStored"
+  /\ phase = "ContentStored"
   (*
   The fresh Contents key is direct at this point. inode.encode_bin therefore
   persists an Offset child address.
   *)
-  / persistedAddress' = "Offset"
-  / UNCHANGED <<strategy, header, codecCorrect, pack, index, staging,
+  /\ persistedAddress' = "Offset"
+  /\ UNCHANGED <<strategy, header, codecCorrect, pack, index, staging,
                  decodedKeyKind, outcome>>
-  / phase' = "ParentPersisted"
+  /\ phase' = "ParentPersisted"
 
 Reopen ==
-  / phase = "ParentPersisted"
-  / staging' = {}
-  / UNCHANGED <<strategy, header, codecCorrect, pack, index,
+  /\ phase = "ParentPersisted"
+  /\ staging' = {}
+  /\ UNCHANGED <<strategy, header, codecCorrect, pack, index,
                  persistedAddress, decodedKeyKind, outcome>>
-  / phase' = "Reopened"
+  /\ phase' = "Reopened"
 
 DecodeParent ==
-  / phase = "Reopened"
-  / persistedAddress = "Offset"
-  / decodedKeyKind' =
+  /\ phase = "Reopened"
+  /\ persistedAddress = "Offset"
+  /\ decodedKeyKind' =
        IF header = "Varint"
        THEN IF codecCorrect THEN "Direct" ELSE "DecodeError"
        ELSE "Indexed"
-  / UNCHANGED <<strategy, header, codecCorrect, pack, index, staging,
+  /\ UNCHANGED <<strategy, header, codecCorrect, pack, index, staging,
                  persistedAddress, outcome>>
-  / phase' = "Decoded"
+  /\ phase' = "Decoded"
 
 ReadContent ==
-  / phase = "Decoded"
-  / outcome' =
+  /\ phase = "Decoded"
+  /\ outcome' =
        IF decodedKeyKind = "Direct"
-       THEN IF Entry(ContentHash, ContentOffset) in pack
+       THEN IF Entry(ContentHash, ContentOffset) \in pack
             THEN "Success" ELSE "Failure"
        ELSE IF decodedKeyKind = "Indexed"
-       THEN IF E e in index : e.hash = ContentHash
+       THEN IF \E e \in index : e.hash = ContentHash
             THEN "Success" ELSE "Failure"
        ELSE "Failure"
-  / UNCHANGED <<strategy, header, codecCorrect, pack, index, staging,
+  /\ UNCHANGED <<strategy, header, codecCorrect, pack, index, staging,
                  persistedAddress, decodedKeyKind>>
-  / phase' = "Read"
+  /\ phase' = "Read"
 
 Done ==
-  / phase = "Read"
-  / UNCHANGED vars
+  /\ phase = "Read"
+  /\ UNCHANGED vars
 
 Next ==
-  / StoreContent
-  / PersistParent
-  / Reopen
-  / DecodeParent
-  / ReadContent
-  / Done
+  \/ StoreContent
+  \/ PersistParent
+  \/ Reopen
+  \/ DecodeParent
+  \/ ReadContent
+  \/ Done
 
 Spec ==
-  Init / [][Next]_vars
+  Init /\ [][Next]_vars
 
 TypeOK ==
-  / strategy in Strategies
-  / header in Headers
-  / codecCorrect in BOOLEAN
-  / pack subseteq {Entry(ContentHash, ContentOffset)}
-  / index subseteq {Entry(ContentHash, ContentOffset)}
-  / staging subseteq {ContentHash}
-  / persistedAddress in {"None", "Offset"}
-  / decodedKeyKind in {"None", "Direct", "Indexed", "DecodeError"}
-  / outcome in {"None", "Success", "Failure"}
-  / phase in
+  /\ strategy \in Strategies
+  /\ header \in Headers
+  /\ codecCorrect \in BOOLEAN
+  /\ pack \subseteq {Entry(ContentHash, ContentOffset)}
+  /\ index \subseteq {Entry(ContentHash, ContentOffset)}
+  /\ staging \subseteq {ContentHash}
+  /\ persistedAddress \in {"None", "Offset"}
+  /\ decodedKeyKind \in {"None", "Direct", "Indexed", "DecodeError"}
+  /\ outcome \in {"None", "Success", "Failure"}
+  /\ phase \in
        {"Init", "ContentStored", "ParentPersisted", "Reopened", "Decoded", "Read"}
 
 AdmissibilityPreserved ==
   Admissible(strategy, header, codecCorrect)
 
 ReopenReadSafety ==
-  phase # "Read" / outcome = "Success"
+  phase # "Read" \/ outcome = "Success"
 
 =============================================================================
