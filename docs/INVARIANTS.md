@@ -87,3 +87,25 @@ minimal executable reproducer:
 
 Only if that transition is established does the abstract counterexample become
 evidence about Irmin rather than about our model.
+
+
+## Configuration admissibility
+
+The implementation matrix adds a second, independent obligation to the original
+reopen-resolution invariant.
+
+Define:
+
+```text
+Admissible(codec, header, strategy) :=
+  (header = Varint -> CodecHasCorrectVarintPrefix(codec))
+  /\
+  (header = None -> StrategyIndexesContents(strategy))
+```
+
+The first conjunct protects offset/length reconstruction. The second protects
+hash/location reconstruction.
+
+The original TLA+ model discharges the second conjunct's failure mode. A later
+model extension may represent the first conjunct explicitly, but the two failure
+modes must remain separate.
