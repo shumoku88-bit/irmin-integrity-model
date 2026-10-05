@@ -31,7 +31,7 @@ jobs:
         run: |
           opam install ./ppx_irmin.opam ./irmin.opam ./irmin-pack.opam --deps-only -y
 
-      - name: Add minimal reproducer
+      - name: Add configuration matrix reproducer
         working-directory: irmin
         shell: bash
         run: |
@@ -47,7 +47,7 @@ jobs:
           cat > repro2369/repro2369.ml <<'EOF'
           open Lwt.Syntax
 
-          module Contents = struct
+          module Custom_contents = struct
             type t = {
               name : string;
               deck : string list;
@@ -58,7 +58,7 @@ jobs:
             let merge = Irmin.Merge.(option (idempotent t))
           end
 
-          module Conf = struct
+          module Varint_conf = struct
             let entries = 32
             let stable_hash = 256
             let contents_length_header = Some `Varint
@@ -66,86 +66,151 @@ jobs:
             let forbid_empty_dir_persistence = true
           end
 
-          module StoreMaker = Irmin_pack_unix.KV (Conf)
-          module Store = StoreMaker.Make (Contents)
+          module None_conf = struct
+            let entries = 32
+            let stable_hash = 256
+            let contents_length_header = None
+            let inode_child_order = `Seeded_hash
+            let forbid_empty_dir_persistence = true
+          end
 
-          let root = "_build/repro2369-db"
+          module Custom_varint_maker = Irmin_pack_unix.KV (Varint_conf)
+          module Custom_varint = Custom_varint_maker.Make (Custom_contents)
+          module Custom_none_maker = Irmin_pack_unix.KV (None_conf)
+          module Custom_none = Custom_none_maker.Make (Custom_contents)
+          module String_varint_maker = Irmin_pack_unix.KV (Varint_conf)
+          module String_varint = String_varint_maker.Make (Irmin.Contents.String)
 
-          let value =
-            Contents.
+          let custom_value =
+            Custom_contents.
               {
                 name = "alpha";
                 deck = [ "one"; "two"; "three" ];
                 reveal = `Everyone;
               }
 
-          let other =
-            Contents.
-              {
-                name = "beta";
-                deck = [ "x"; "y" ];
-                reveal = `SpectatorsOnly;
-              }
+          let custom_equal = Irmin.Type.(unstage (equal Custom_contents.t))
+          let custom_to_bin = Irmin.Type.(unstage (to_bin_string Custom_contents.t))
 
-          let config ~fresh =
-            Irmin_pack.config ~fresh
-              ~indexing_strategy:Irmin_pack.Indexing_strategy.minimal root
-
-          let equal_contents = Irmin.Type.(unstage (equal Contents.t))
-          let to_bin = Irmin.Type.(unstage (to_bin_string Contents.t))
-
-          let check_value where got =
-            if not (equal_contents value got) then
-              failwith ("value mismatch at " ^ where);
-            Printf.printf "READ_OK %s\n%!" where
-
-          let print_encoding_contract () =
-            let bin = to_bin value in
+          let print_custom_encoding () =
+            let bin = custom_to_bin custom_value in
             let first = Char.code bin.[0] in
             Printf.printf "ENCODED_LENGTH %d\n%!" (String.length bin);
             Printf.printf "FIRST_BYTE %d\n%!" first;
             Printf.printf "VARINT_CONTRACT_ONE_BYTE %b\n%!"
               (first = String.length bin - 1)
 
+          let run_custom_varint ~name ~strategy =
+            let root = "_build/" ^ name in
+            let config ~fresh = Irmin_pack.config ~fresh ~indexing_strategy:strategy root in
+            let* repo = Custom_varint.Repo.v (config ~fresh:true) in
+            let* store = Custom_varint.main repo in
+            let* () =
+              Custom_varint.set_exn ~info:(fun () -> Custom_varint.Info.empty)
+                store [ "k" ] custom_value
+            in
+            let* same = Custom_varint.get store [ "k" ] in
+            if not (custom_equal same custom_value) then failwith "same-repo mismatch";
+            let* () = Custom_varint.Repo.close repo in
+            let* repo2 = Custom_varint.Repo.v (config ~fresh:false) in
+            let* store2 = Custom_varint.main repo2 in
+            let* reopened = Custom_varint.get store2 [ "k" ] in
+            if not (custom_equal reopened custom_value) then failwith "reopen mismatch";
+            Custom_varint.Repo.close repo2
+
+          let run_custom_none ~name ~strategy =
+            let root = "_build/" ^ name in
+            let config ~fresh = Irmin_pack.config ~fresh ~indexing_strategy:strategy root in
+            let* repo = Custom_none.Repo.v (config ~fresh:true) in
+            let* store = Custom_none.main repo in
+            let* () =
+              Custom_none.set_exn ~info:(fun () -> Custom_none.Info.empty)
+                store [ "k" ] custom_value
+            in
+            let* same = Custom_none.get store [ "k" ] in
+            if not (custom_equal same custom_value) then failwith "same-repo mismatch";
+            let* () = Custom_none.Repo.close repo in
+            let* repo2 = Custom_none.Repo.v (config ~fresh:false) in
+            let* store2 = Custom_none.main repo2 in
+            let* reopened = Custom_none.get store2 [ "k" ] in
+            if not (custom_equal reopened custom_value) then failwith "reopen mismatch";
+            Custom_none.Repo.close repo2
+
+          let run_string_varint ~name ~strategy =
+            let root = "_build/" ^ name in
+            let config ~fresh = Irmin_pack.config ~fresh ~indexing_strategy:strategy root in
+            let* repo = String_varint.Repo.v (config ~fresh:true) in
+            let* store = String_varint.main repo in
+            let value = "hello-world" in
+            let* () =
+              String_varint.set_exn ~info:(fun () -> String_varint.Info.empty)
+                store [ "k" ] value
+            in
+            let* same = String_varint.get store [ "k" ] in
+            if not (String.equal same value) then failwith "same-repo mismatch";
+            let* () = String_varint.Repo.close repo in
+            let* repo2 = String_varint.Repo.v (config ~fresh:false) in
+            let* store2 = String_varint.main repo2 in
+            let* reopened = String_varint.get store2 [ "k" ] in
+            if not (String.equal reopened value) then failwith "reopen mismatch";
+            String_varint.Repo.close repo2
+
+          let observe name f =
+            Lwt.catch
+              (fun () ->
+                let+ () = f () in
+                Printf.printf "RESULT %s PASS\n%!" name)
+              (fun exn ->
+                Printf.printf "RESULT %s FAIL %s\n%!" name (Printexc.to_string exn);
+                Lwt.return_unit)
+
           let run () =
-            print_encoding_contract ();
-
-            let* repo = Store.Repo.v (config ~fresh:true) in
-            let* store = Store.main repo in
+            print_custom_encoding ();
             let* () =
-              Store.set_exn ~info:(fun () -> Store.Info.empty) store [ "k" ] value
+              observe "string-varint-minimal" (fun () ->
+                run_string_varint ~name:"string-varint-minimal"
+                  ~strategy:Irmin_pack.Indexing_strategy.minimal)
             in
-            let* got = Store.get store [ "k" ] in
-            check_value "same_repo" got;
-            let* () = Store.Repo.close repo in
-
-            Printf.printf "REOPEN\n%!";
-            let* repo2 = Store.Repo.v (config ~fresh:false) in
-            let* store2 = Store.main repo2 in
-            let* got2 = Store.get store2 [ "k" ] in
-            check_value "after_reopen" got2;
-
             let* () =
-              Store.set_exn ~info:(fun () -> Store.Info.empty) store2 [ "other" ] other
+              observe "custom-varint-minimal" (fun () ->
+                run_custom_varint ~name:"custom-varint-minimal"
+                  ~strategy:Irmin_pack.Indexing_strategy.minimal)
             in
-            let* got3 = Store.get store2 [ "k" ] in
-            check_value "after_sibling_update" got3;
-            let* () = Store.Repo.close repo2 in
-
-            Printf.printf "REOPEN_AFTER_UPDATE\n%!";
-            let* repo3 = Store.Repo.v (config ~fresh:false) in
-            let* store3 = Store.main repo3 in
-            let* got4 = Store.get store3 [ "k" ] in
-            check_value "after_second_reopen" got4;
-            Store.Repo.close repo3
+            let* () =
+              observe "custom-varint-minimal-with-contents" (fun () ->
+                run_custom_varint ~name:"custom-varint-minimal-with-contents"
+                  ~strategy:Irmin_pack.Indexing_strategy.minimal_with_contents)
+            in
+            let* () =
+              observe "custom-varint-always" (fun () ->
+                run_custom_varint ~name:"custom-varint-always"
+                  ~strategy:Irmin_pack.Indexing_strategy.always)
+            in
+            let* () =
+              observe "custom-none-minimal" (fun () ->
+                run_custom_none ~name:"custom-none-minimal"
+                  ~strategy:Irmin_pack.Indexing_strategy.minimal)
+            in
+            observe "custom-none-always" (fun () ->
+              run_custom_none ~name:"custom-none-always"
+                ~strategy:Irmin_pack.Indexing_strategy.always)
 
           let () = Lwt_main.run (run ())
           EOF
 
-      - name: Build reproducer
+      - name: Build matrix
         working-directory: irmin
         run: opam exec -- dune build repro2369/repro2369.exe
 
-      - name: Run reproducer
+      - name: Run matrix
         working-directory: irmin
-        run: opam exec -- dune exec repro2369/repro2369.exe
+        shell: bash
+        run: |
+          set -euo pipefail
+          opam exec -- dune exec repro2369/repro2369.exe | tee /tmp/repro-matrix.log
+
+          grep -F 'VARINT_CONTRACT_ONE_BYTE false' /tmp/repro-matrix.log
+          grep -F 'RESULT string-varint-minimal PASS' /tmp/repro-matrix.log
+          grep -F 'RESULT custom-varint-minimal FAIL' /tmp/repro-matrix.log
+          grep -F 'RESULT custom-none-minimal FAIL' /tmp/repro-matrix.log
+          grep -F 'RESULT custom-none-always PASS' /tmp/repro-matrix.log
