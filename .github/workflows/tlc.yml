@@ -1,0 +1,62 @@
+name: TLC
+
+on:
+  push:
+    branches:
+      - main
+      - research/minimal-index-integrity
+  pull_request:
+
+jobs:
+  model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Download pinned TLA+ tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar \
+            -o /tmp/tla2tools.jar
+          echo 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104  /tmp/tla2tools.jar' | sha1sum -c -
+          java -cp /tmp/tla2tools.jar tlc2.TLC -help >/dev/null
+
+      - name: Check Minimal + Direct
+        working-directory: model
+        run: |
+          java -cp /tmp/tla2tools.jar tlc2.TLC \
+            -config MinimalDirect.cfg IrminPack.tla
+
+      - name: Check Always + Indexed
+        working-directory: model
+        run: |
+          java -cp /tmp/tla2tools.jar tlc2.TLC \
+            -config AlwaysIndexed.cfg IrminPack.tla
+
+      - name: Require counterexample for Minimal + Indexed
+        working-directory: model
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          java -cp /tmp/tla2tools.jar tlc2.TLC \
+            -config MinimalIndexed.cfg IrminPack.tla \
+            > /tmp/minimal-indexed.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/minimal-indexed.log
+
+          if [ "$status" -eq 0 ]; then
+            echo 'Expected ReopenResolutionSafety to be violated, but TLC succeeded.' >&2
+            exit 1
+          fi
+
+          grep -F 'Invariant ReopenResolutionSafety is violated' /tmp/minimal-indexed.log
