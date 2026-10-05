@@ -321,3 +321,25 @@ jobs:
           grep -F 'BEFORE old=true new=false' /tmp/moment-b.log
           grep -F 'AFTER_CLEANUP disk_end=20 old=true new=false' /tmp/moment-b.log
           grep -F 'AFTER_RELOAD old=true new=true' /tmp/moment-b.log
+
+      - name: Add public-store GC Moment B reproducer
+        working-directory: irmin
+        shell: bash
+        run: |
+          mkdir -p repro_moment_b_public
+          cp ../repro/dune repro_moment_b_public/dune
+          cp ../repro/moment_b_public.ml repro_moment_b_public/moment_b_public.ml
+
+      - name: Build public-store GC Moment B reproducer
+        working-directory: irmin
+        run: opam exec -- dune build repro_moment_b_public/moment_b_public.exe
+
+      - name: Run public-store GC Moment B reproducer
+        working-directory: irmin
+        shell: bash
+        run: |
+          set -euo pipefail
+          opam exec -- dune exec repro_moment_b_public/moment_b_public.exe | tee /tmp/moment-b-public.log
+          grep -F 'AFTER_GC_LOWER true' /tmp/moment-b-public.log
+          grep -F 'FIRST_REOPEN_READ FAIL' /tmp/moment-b-public.log
+          grep -F 'SECOND_REOPEN_READ PASS' /tmp/moment-b-public.log
