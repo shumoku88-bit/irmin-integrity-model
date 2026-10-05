@@ -43,6 +43,7 @@ jobs:
            (preprocess
             (pps ppx_irmin)))
           EOF
+
           cat > repro2369/repro2369.ml <<'EOF'
           open Lwt.Syntax
 
@@ -78,16 +79,37 @@ jobs:
                 reveal = `Everyone;
               }
 
+          let other =
+            Contents.
+              {
+                name = "beta";
+                deck = [ "x"; "y" ];
+                reveal = `SpectatorsOnly;
+              }
+
           let config ~fresh =
             Irmin_pack.config ~fresh
               ~indexing_strategy:Irmin_pack.Indexing_strategy.minimal root
 
+          let equal_contents = Irmin.Type.(unstage (equal Contents.t))
+          let to_bin = Irmin.Type.(unstage (to_bin_string Contents.t))
+
           let check_value where got =
-            if not (Irmin.Type.equal Contents.t value got) then
+            if not (equal_contents value got) then
               failwith ("value mismatch at " ^ where);
             Printf.printf "READ_OK %s\n%!" where
 
+          let print_encoding_contract () =
+            let bin = to_bin value in
+            let first = Char.code bin.[0] in
+            Printf.printf "ENCODED_LENGTH %d\n%!" (String.length bin);
+            Printf.printf "FIRST_BYTE %d\n%!" first;
+            Printf.printf "VARINT_CONTRACT_ONE_BYTE %b\n%!"
+              (first = String.length bin - 1)
+
           let run () =
+            print_encoding_contract ();
+
             let* repo = Store.Repo.v (config ~fresh:true) in
             let* store = Store.main repo in
             let* () =
@@ -104,19 +126,13 @@ jobs:
             check_value "after_reopen" got2;
 
             let* () =
-              Store.set_exn ~info:(fun () -> Store.Info.empty) store2 [ "other" ]
-                Contents.
-                  {
-                    name = "beta";
-                    deck = [ "x"; "y" ];
-                    reveal = `SpectatorsOnly;
-                  }
+              Store.set_exn ~info:(fun () -> Store.Info.empty) store2 [ "other" ] other
             in
             let* got3 = Store.get store2 [ "k" ] in
             check_value "after_sibling_update" got3;
             let* () = Store.Repo.close repo2 in
 
-            Printf.printf "REOPEN_AFTER_UPDATE\\n%!";
+            Printf.printf "REOPEN_AFTER_UPDATE\n%!";
             let* repo3 = Store.Repo.v (config ~fresh:false) in
             let* store3 = Store.main repo3 in
             let* got4 = Store.get store3 [ "k" ] in
