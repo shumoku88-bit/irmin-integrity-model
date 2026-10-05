@@ -102,7 +102,26 @@ jobs:
             let* store2 = Store.main repo2 in
             let* got2 = Store.get store2 [ "k" ] in
             check_value "after_reopen" got2;
-            Store.Repo.close repo2
+
+            let* () =
+              Store.set_exn ~info:(fun () -> Store.Info.empty) store2 [ "other" ]
+                Contents.
+                  {
+                    name = "beta";
+                    deck = [ "x"; "y" ];
+                    reveal = `SpectatorsOnly;
+                  }
+            in
+            let* got3 = Store.get store2 [ "k" ] in
+            check_value "after_sibling_update" got3;
+            let* () = Store.Repo.close repo2 in
+
+            Printf.printf "REOPEN_AFTER_UPDATE\\n%!";
+            let* repo3 = Store.Repo.v (config ~fresh:false) in
+            let* store3 = Store.main repo3 in
+            let* got4 = Store.get store3 [ "k" ] in
+            check_value "after_second_reopen" got4;
+            Store.Repo.close repo3
 
           let () = Lwt_main.run (run ())
           EOF
