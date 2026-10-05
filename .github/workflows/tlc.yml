@@ -27,7 +27,6 @@ jobs:
             https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar \
             -o /tmp/tla2tools.jar
           echo 'bee4a54f3ee3d4afc347c3240ec2d9e93b075104  /tmp/tla2tools.jar' | sha1sum -c -
-          java -cp /tmp/tla2tools.jar tlc2.TLC -help >/dev/null
 
       - name: Check Minimal + Direct
         working-directory: model
