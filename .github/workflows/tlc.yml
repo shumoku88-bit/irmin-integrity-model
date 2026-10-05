@@ -40,6 +40,12 @@ jobs:
           java -cp /tmp/tla2tools.jar tlc2.TLC \
             -config AlwaysIndexed.cfg IrminPack.tla
 
+      - name: Check documented-admissible state space
+        working-directory: model
+        run: |
+          java -cp /tmp/tla2tools.jar tlc2.TLC \
+            -config Admissible.cfg Admissible.tla
+
       - name: Require counterexample for Minimal + Indexed
         working-directory: model
         shell: bash
