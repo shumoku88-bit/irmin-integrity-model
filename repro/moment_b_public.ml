@@ -57,8 +57,8 @@ let commit_is_in_lower ~lower_root commit =
       in
       match Volume_control.read_payload ~path:volume_control with
       | Ok payload ->
-          let open Int63.Syntax in
-          payload.start_offset <= offset && offset < payload.end_offset
+          Int63.compare payload.start_offset offset <= 0
+          && Int63.compare offset payload.end_offset < 0
       | Error _ -> false)
   | Indexed _ -> false
 
