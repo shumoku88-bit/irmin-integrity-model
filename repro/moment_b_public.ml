@@ -82,25 +82,38 @@ let run () =
     Irmin_pack.Layout.V5.Volume.control ~root:volume_root
   in
   let old_backup = volume_control ^ ".pre-gc" in
-  copy_file volume_control old_backup;
 
+  (* Step 1: Commit c1, c2 and run initial GC to populate volume.0
+     and create volume.control on disk. *)
   let* () = Store.set_exn ~info main [ "k" ] "v1" in
   let* c1 = Store.Head.get main in
-  let c1_hash = Store.Commit.hash c1 in
-
   let* () = Store.set_exn ~info main [ "k" ] "v2" in
   let* c2 = Store.Head.get main in
 
   let* _ = Store.Gc.start_exn repo (Store.Commit.key c2) in
   let* _ = Store.Gc.finalise_exn ~wait:true repo in
 
-  let* c1_after_gc = Store.Commit.of_hash repo c1_hash in
-  let c1_after_gc =
-    match c1_after_gc with
-    | None -> failwith "c1 unexpectedly missing after archival GC"
+  (* volume.control now exists. Backup this pre-GC payload for the second GC *)
+  copy_file volume_control old_backup;
+
+  (* Step 2: Commit c3, c4 and run second GC to extend the volume range *)
+  let* () = Store.set_exn ~info main [ "k" ] "v3" in
+  let* c3 = Store.Head.get main in
+  let c3_hash = Store.Commit.hash c3 in
+
+  let* () = Store.set_exn ~info main [ "k" ] "v4" in
+  let* c4 = Store.Head.get main in
+
+  let* _ = Store.Gc.start_exn repo (Store.Commit.key c4) in
+  let* _ = Store.Gc.finalise_exn ~wait:true repo in
+
+  let* c3_after_gc = Store.Commit.of_hash repo c3_hash in
+  let c3_after_gc =
+    match c3_after_gc with
+    | None -> failwith "c3 unexpectedly missing after archival GC"
     | Some c -> c
   in
-  Printf.printf "AFTER_GC_LOWER %b\n%!" (commit_is_in_lower c1_after_gc);
+  Printf.printf "AFTER_GC_LOWER %b\n%!" (commit_is_in_lower c3_after_gc);
 
   let gen = generation repo in
   let tmp_control =
@@ -122,12 +135,12 @@ let run () =
     (Int63.to_int new_payload.end_offset) gen;
 
   let* repo1 = Store.Repo.v (config ~fresh:false ~root ~lower_root) in
-  let* first = read_commit repo1 c1_hash in
+  let* first = read_commit repo1 c3_hash in
   pp_read "FIRST_REOPEN_READ" first;
   let* () = Store.Repo.close repo1 in
 
   let* repo2 = Store.Repo.v (config ~fresh:false ~root ~lower_root) in
-  let* second = read_commit repo2 c1_hash in
+  let* second = read_commit repo2 c3_hash in
   pp_read "SECOND_REOPEN_READ" second;
   let* () = Store.Repo.close repo2 in
 
