@@ -1,0 +1,3 @@
+(executable
+ (name moment_b_public)
+ (libraries irmin irmin-pack.unix lwt.unix optint))
