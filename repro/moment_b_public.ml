@@ -86,7 +86,7 @@ let run () =
   (* Step 1: Commit c1, c2 and run initial GC to populate volume.0
      and create volume.control on disk. *)
   let* () = Store.set_exn ~info main [ "k" ] "v1" in
-  let* c1 = Store.Head.get main in
+  let* _ = Store.Head.get main in
   let* () = Store.set_exn ~info main [ "k" ] "v2" in
   let* c2 = Store.Head.get main in
 
