@@ -47,10 +47,20 @@ let generation repo =
   | Gced { generation; _ } -> generation
   | _ -> failwith "expected Gced status"
 
-let commit_is_in_lower commit =
+let commit_is_in_lower ~lower_root commit =
   match Irmin_pack_unix.Pack_key.inspect (Store.Commit.key commit) with
   | Direct { volume_identifier = Some _; _ } -> true
-  | Direct _ | Indexed _ -> false
+  | Direct { offset; _ } -> (
+      let volume_control =
+        Irmin_pack.Layout.V5.Volume.control
+          ~root:(Irmin_pack.Layout.V5.Volume.directory ~idx:0 ~root:lower_root)
+      in
+      match Volume_control.read_payload ~path:volume_control with
+      | Ok payload ->
+          let open Int63.Syntax in
+          payload.start_offset <= offset && offset < payload.end_offset
+      | Error _ -> false)
+  | Indexed _ -> false
 
 let read_commit repo hash =
   Lwt.catch
@@ -113,7 +123,7 @@ let run () =
     | None -> failwith "c3 unexpectedly missing after archival GC"
     | Some c -> c
   in
-  Printf.printf "AFTER_GC_LOWER %b\n%!" (commit_is_in_lower c3_after_gc);
+  Printf.printf "AFTER_GC_LOWER %b\n%!" (commit_is_in_lower ~lower_root c3_after_gc);
 
   let gen = generation repo in
   let tmp_control =
